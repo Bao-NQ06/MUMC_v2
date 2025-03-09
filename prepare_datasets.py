@@ -192,85 +192,83 @@ def create_question_mask(question_tokens, pad_token_idx):
     """
     return question_tokens == pad_token_idx
 
-def prepare_dataloaders(batch_size=32, num_workers=4):
-    """
-    Prepare dataloaders for training, validation, and testing.
+def prepare_dataloaders(batch_size: int = 32) -> Tuple[DataLoader, DataLoader, DataLoader, VQAPreprocessor]:
+    logger.info("Downloading and preparing datasets...")
     
-    Args:
-        batch_size: Batch size for dataloaders
-        num_workers: Number of worker processes for data loading
+    try:
+        # Add progress bar for dataset loading
+        with tqdm(desc="Loading PathVQA", unit="files") as pbar:
+            pathvqa_data = load_pathvqa_dataset()
+            pbar.update()
         
-    Returns:
-        Tuple of (train_loader, val_loader, test_loader, preprocessor)
-    """
-    # Check if processed data exists
-    train_csv = os.path.join(DATA_DIR, "train.csv")
-    val_csv = os.path.join(DATA_DIR, "val.csv")
-    test_csv = os.path.join(DATA_DIR, "test.csv")
-    
-    if not (os.path.exists(train_csv) and os.path.exists(val_csv) and os.path.exists(test_csv)):
-        # Download and prepare datasets if not already done
-        train_df, val_df, test_df = download_and_prepare_datasets()
-    else:
-        # Load existing processed data
-        logger.info("Loading existing processed data...")
-        train_df = pd.read_csv(train_csv)
-        val_df = pd.read_csv(val_csv)
-        test_df = pd.read_csv(test_csv)
-    
-    # Initialize preprocessor
-    preprocessor = VQAPreprocessor(
-        image_dir=IMAGE_DIR,
-        max_seq_len=77,
-        img_size=224,
-        min_token_freq=3,
-        cache_dir=CACHE_DIR
-    )
-    
-    # Check if vocabulary exists
-    if os.path.exists(VOCAB_PATH):
-        logger.info("Loading existing vocabulary...")
-        preprocessor.load_vocabularies(VOCAB_PATH)
-    else:
-        logger.info("Building vocabulary...")
-        preprocessor.build_vocabulary(
-            questions=train_df["question"].tolist(),
-            answers=train_df["answer"].tolist()
+        with tqdm(desc="Loading VQA-RAD", unit="files") as pbar:
+            vqa_rad_data = load_vqa_rad_dataset()
+            pbar.update()
+        
+        logger.info(f"PathVQA dataset splits: {pathvqa_data.keys()}")
+        logger.info(f"VQA-RAD dataset splits: {vqa_rad_data.keys()}")
+        
+        # Add timeout for dataset operations
+        timeout = 300  # 5 minutes timeout
+        
+        with TimeoutHandler(timeout):
+            # Combine datasets
+            train_data = pd.concat([
+                pathvqa_data['train'],
+                vqa_rad_data['train']
+            ]).reset_index(drop=True)
+            
+            val_data = pathvqa_data['validation']
+            
+            test_data = pd.concat([
+                pathvqa_data['test'],
+                vqa_rad_data['test']
+            ]).reset_index(drop=True)
+        
+        # Initialize preprocessor
+        preprocessor = VQAPreprocessor(
+            image_dir="path/to/images",
+            cache_dir="path/to/cache"
         )
-        # Save vocabulary
-        preprocessor.save_vocabularies(VOCAB_PATH)
+        
+        # Create dataloaders with progress bars
+        train_loader = create_dataloader_with_progress(train_data, preprocessor, batch_size, "Training")
+        val_loader = create_dataloader_with_progress(val_data, preprocessor, batch_size, "Validation")
+        test_loader = create_dataloader_with_progress(test_data, preprocessor, batch_size, "Test")
+        
+        return train_loader, val_loader, test_loader, preprocessor
+        
+    except TimeoutError:
+        logger.error("Dataset preparation timed out. Please check your internet connection and try again.")
+        raise
+    except KeyboardInterrupt:
+        logger.info("Dataset preparation interrupted by user. Cleaning up...")
+        # Add cleanup code here if needed
+        raise
+    except Exception as e:
+        logger.error(f"Error preparing datasets: {str(e)}")
+        raise
+
+class TimeoutHandler:
+    def __init__(self, timeout):
+        self.timeout = timeout
     
-    # Create datasets
-    train_dataset = VQADataset(train_df, preprocessor, is_training=True)
-    val_dataset = VQADataset(val_df, preprocessor, is_training=False)
-    test_dataset = VQADataset(test_df, preprocessor, is_training=False)
+    def __enter__(self):
+        self.start_time = time.time()
     
-    # Create dataloaders
-    train_loader = DataLoader(
-        train_dataset,
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        if time.time() - self.start_time > self.timeout:
+            raise TimeoutError("Operation timed out")
+
+def create_dataloader_with_progress(data, preprocessor, batch_size, desc):
+    dataset = VQADataset(data, preprocessor)
+    return DataLoader(
+        dataset,
         batch_size=batch_size,
         shuffle=True,
-        num_workers=num_workers,
+        num_workers=2,  # Reduced number of workers for Colab
         pin_memory=True
     )
-    
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True
-    )
-    
-    test_loader = DataLoader(
-        test_dataset,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=True
-    )
-    
-    return train_loader, val_loader, test_loader, preprocessor
 
 if __name__ == "__main__":
     # Prepare dataloaders

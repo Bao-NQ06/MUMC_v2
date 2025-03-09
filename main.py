@@ -78,26 +78,42 @@ def main():
     # Parse command line arguments
     args = parse_args()
     
-    # Set random seeds for reproducibility
-    torch.manual_seed(42)
-    if torch.cuda.is_available():
-        torch.cuda.manual_seed_all(42)
-    
-    # Configure logging to file
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    log_file = os.path.join(LOGS_DIR, f"main_{timestamp}.log")
-    file_handler = logging.FileHandler(log_file)
-    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
-    logger.addHandler(file_handler)
-    
-    logger.info(f"Starting Medical VQA pipeline in {args.mode} mode")
-    logger.info(f"Using device: {args.device}")
-    
-    # Prepare datasets
-    if args.mode in ["prepare", "all"]:
-        logger.info("Preparing datasets...")
-        train_loader, val_loader, test_loader, preprocessor = prepare_dataloaders(batch_size=args.batch_size)
-        logger.info(f"Dataset preparation complete. Vocabulary size: {len(preprocessor.word2idx)}")
+    try:
+        # Set random seeds for reproducibility
+        torch.manual_seed(42)
+        if torch.cuda.is_available():
+            torch.cuda.manual_seed_all(42)
+        
+        # Configure logging to file
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_file = os.path.join(LOGS_DIR, f"main_{timestamp}.log")
+        file_handler = logging.FileHandler(log_file)
+        file_handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
+        logger.addHandler(file_handler)
+        
+        logger.info(f"Starting Medical VQA pipeline in {args.mode} mode")
+        logger.info(f"Using device: {args.device}")
+        
+        # Prepare datasets with progress tracking
+        if args.mode in ["prepare", "all"]:
+            logger.info("Preparing datasets...")
+            try:
+                train_loader, val_loader, test_loader, preprocessor = prepare_dataloaders(batch_size=args.batch_size)
+                logger.info(f"Dataset preparation complete. Vocabulary size: {len(preprocessor.word2idx)}")
+            except KeyboardInterrupt:
+                logger.warning("Dataset preparation interrupted by user.")
+                return
+            except Exception as e:
+                logger.error(f"Dataset preparation failed: {str(e)}")
+                return
+        
+        # Continue with rest of the pipeline...
+        
+    except KeyboardInterrupt:
+        logger.info("Pipeline interrupted by user. Exiting gracefully...")
+    except Exception as e:
+        logger.error(f"Pipeline failed: {str(e)}")
+        raise
     
     # Pretrain model
     pretrained_path = args.pretrained_path
